@@ -107,24 +107,49 @@ def list_conversations() -> List[Dict[str, Any]]:
     return conversations
 
 
-def add_user_message(conversation_id: str, content: str):
+def add_user_message(
+    conversation_id: str,
+    content: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+):
     """
     Add a user message to a conversation.
 
     Args:
         conversation_id: Conversation identifier
         content: User message content
+        documents: Optional list of {"filename", "text"} dicts to attach
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
-        "role": "user",
-        "content": content
-    })
+    message: Dict[str, Any] = {"role": "user", "content": content}
+    if documents:
+        message["documents"] = documents
+
+    conversation["messages"].append(message)
 
     save_conversation(conversation)
+
+
+def collect_conversation_documents(
+    conversation: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Flatten all documents attached to prior user messages.
+
+    Later messages win on filename collision (most recent upload of a
+    given filename is the one passed to the council).
+    """
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for msg in conversation.get("messages", []):
+        if msg.get("role") != "user":
+            continue
+        for doc in msg.get("documents", []) or []:
+            name = doc.get("filename")
+            if name:
+                by_name[name] = doc
+    return list(by_name.values())
 
 
 def add_assistant_message(

@@ -4,6 +4,15 @@
 
 const API_BASE = 'http://localhost:8001';
 
+function buildMessageFormData(content, files) {
+  const formData = new FormData();
+  formData.append('content', content);
+  for (const file of files || []) {
+    formData.append('files', file, file.name);
+  }
+  return formData;
+}
+
 export const api = {
   /**
    * List all conversations.
@@ -49,15 +58,12 @@ export const api = {
   /**
    * Send a message in a conversation.
    */
-  async sendMessage(conversationId, content) {
+  async sendMessage(conversationId, content, files = []) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
+        body: buildMessageFormData(content, files),
       }
     );
     if (!response.ok) {
@@ -68,20 +74,17 @@ export const api = {
 
   /**
    * Send a message and receive streaming updates.
-   * @param {string} conversationId - The conversation ID
-   * @param {string} content - The message content
-   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
-   * @returns {Promise<void>}
+   * @param {string} conversationId
+   * @param {string} content
+   * @param {File[]} files
+   * @param {(eventType: string, data: object) => void} onEvent
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, files, onEvent) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
+        body: buildMessageFormData(content, files),
       }
     );
 
@@ -91,13 +94,15 @@ export const api = {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {

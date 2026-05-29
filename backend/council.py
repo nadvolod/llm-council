@@ -1,21 +1,54 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+def build_user_prompt(
+    user_query: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Prepend any attached document text to the user's question."""
+    if not documents:
+        return user_query
+
+    sections: List[str] = []
+    for doc in documents:
+        text = (doc.get("text") or "").strip()
+        if not text:
+            continue
+        filename = doc.get("filename", "document")
+        sections.append(f"=== {filename} ===\n{text}")
+
+    if not sections:
+        return user_query
+
+    docs_block = "\n\n".join(sections)
+    return (
+        "Reference documents:\n\n"
+        f"{docs_block}\n\n"
+        "---\n\n"
+        f"User question: {user_query}"
+    )
+
+
+async def stage1_collect_responses(
+    user_query: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
     Args:
         user_query: The user's question
+        documents: Optional list of {"filename", "text"} dicts
 
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    prompt = build_user_prompt(user_query, documents)
+    messages = [{"role": "user", "content": prompt}]
 
     # Query all models in parallel
     responses = await query_models_parallel(COUNCIL_MODELS, messages)
@@ -293,18 +326,24 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def run_full_council(
+    user_query: str,
+    documents: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
     Args:
         user_query: The user's question
+        documents: Optional reference documents to include as context
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
+    combined_prompt = build_user_prompt(user_query, documents)
+
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    stage1_results = await stage1_collect_responses(user_query, documents)
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -314,14 +353,14 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         }, {}
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model = await stage2_collect_rankings(combined_prompt, stage1_results)
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
 
     # Stage 3: Synthesize final answer
     stage3_result = await stage3_synthesize_final(
-        user_query,
+        combined_prompt,
         stage1_results,
         stage2_results
     )

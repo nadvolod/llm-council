@@ -5,12 +5,25 @@ import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import './ChatInterface.css';
 
+const ALLOWED_EXTS = ['.pdf', '.docx', '.txt', '.md'];
+const MAX_FILES = 10;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+function fileExtension(name) {
+  const lower = name.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 ? lower.slice(dot) : '';
+}
+
 export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
 }) {
   const [input, setInput] = useState('');
+  const [files, setFiles] = useState([]);
+  const [fileError, setFileError] = useState('');
+  const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -21,16 +34,57 @@ export default function ChatInterface({
     scrollToBottom();
   }, [conversation]);
 
+  const addFiles = (incoming) => {
+    setFileError('');
+    const accepted = [];
+    let error = '';
+
+    for (const f of incoming) {
+      const ext = fileExtension(f.name);
+      if (!ALLOWED_EXTS.includes(ext)) {
+        error = `Unsupported file type: ${f.name}`;
+        continue;
+      }
+      if (f.size > MAX_FILE_BYTES) {
+        error = `${f.name} exceeds 10 MB limit`;
+        continue;
+      }
+      accepted.push(f);
+    }
+
+    setFiles((prev) => {
+      const combined = [...prev, ...accepted];
+      if (combined.length > MAX_FILES) {
+        error = `Maximum ${MAX_FILES} files allowed`;
+        return combined.slice(0, MAX_FILES);
+      }
+      return combined;
+    });
+
+    if (error) setFileError(error);
+  };
+
+  const handleFileChange = (e) => {
+    const selected = Array.from(e.target.files || []);
+    addFiles(selected);
+    e.target.value = '';
+  };
+
+  const removeFile = (index) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+    setFileError('');
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input);
-      setInput('');
-    }
+    if (!input.trim() || isLoading) return;
+    onSendMessage(input, files);
+    setInput('');
+    setFiles([]);
+    setFileError('');
   };
 
   const handleKeyDown = (e) => {
-    // Submit on Enter (without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -66,13 +120,21 @@ export default function ChatInterface({
                     <div className="markdown-content">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
+                    {msg.documents && msg.documents.length > 0 && (
+                      <div className="message-attachments">
+                        {msg.documents.map((doc, i) => (
+                          <span key={i} className="attachment-chip">
+                            📎 {doc.filename}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
                 <div className="assistant-message">
                   <div className="message-label">LLM Council</div>
 
-                  {/* Stage 1 */}
                   {msg.loading?.stage1 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -81,7 +143,6 @@ export default function ChatInterface({
                   )}
                   {msg.stage1 && <Stage1 responses={msg.stage1} />}
 
-                  {/* Stage 2 */}
                   {msg.loading?.stage2 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -96,7 +157,6 @@ export default function ChatInterface({
                     />
                   )}
 
-                  {/* Stage 3 */}
                   {msg.loading?.stage3 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -120,8 +180,26 @@ export default function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.messages.length === 0 && (
-        <form className="input-form" onSubmit={handleSubmit}>
+      <form className="input-form" onSubmit={handleSubmit}>
+        <div className="input-form-main">
+          {files.length > 0 && (
+            <div className="file-chip-list" role="list">
+              {files.map((f, i) => (
+                <span key={i} className="file-chip" role="listitem">
+                  <span className="file-chip-name">📎 {f.name}</span>
+                  <button
+                    type="button"
+                    className="file-chip-remove"
+                    aria-label={`Remove ${f.name}`}
+                    onClick={() => removeFile(i)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {fileError && <div className="file-error" role="alert">{fileError}</div>}
           <textarea
             className="message-input"
             placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
@@ -131,6 +209,27 @@ export default function ChatInterface({
             disabled={isLoading}
             rows={3}
           />
+        </div>
+        <div className="input-form-actions">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,.txt,.md"
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+            aria-label="Attach files"
+            data-testid="file-input"
+          />
+          <button
+            type="button"
+            className="attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            aria-label="Attach files"
+          >
+            📎
+          </button>
           <button
             type="submit"
             className="send-button"
@@ -138,8 +237,8 @@ export default function ChatInterface({
           >
             Send
           </button>
-        </form>
-      )}
+        </div>
+      </form>
     </div>
   );
 }
