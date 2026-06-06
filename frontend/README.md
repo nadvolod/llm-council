@@ -1,16 +1,42 @@
-# React + Vite
+# LLM Council — Frontend (Next.js + TypeScript)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Next.js 15 (App Router) app: public marketing landing page + Clerk-authenticated
+council UI. Talks to the FastAPI council backend over an authed `fetch` wrapper
+(`lib/api.ts`) that attaches the Clerk session JWT.
 
-Currently, two official plugins are available:
+## Develop
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+npm install
+cp .env.example .env.local   # fill in values
+npm run dev
+```
 
-## React Compiler
+## Scripts
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `npm run dev` — Next dev server
+- `npm run build` — production build
+- `npm test` — Vitest unit/component tests
+- `npm run lint` — Next ESLint
 
-## Expanding the ESLint configuration
+## Environment variables
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+See `.env.example`:
+
+- `NEXT_PUBLIC_API_URL` — FastAPI backend base URL
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — Clerk keys
+- `NEXT_PUBLIC_AUTHOR_LINKEDIN_URL` / `NEXT_PUBLIC_GITHUB_REPO_URL` — footer links
+
+## Clerk dashboard configuration (manual, deferred)
+
+These must be set in the Clerk dashboard — they cannot be configured from code:
+
+- Enable **Username + Password** authentication and require **email** (for password reset).
+- Enable **Smart CAPTCHA (Cloudflare Turnstile)** and bot protection on sign-up.
+- Configure allowed origins / paths so `/sign-in`, `/sign-up`, and `/app` resolve.
+
+## Routes
+
+- `/` — public marketing landing page
+- `/sign-in`, `/sign-up` — Clerk hosted auth components
+- `/app` — council UI (protected by `middleware.ts`)
