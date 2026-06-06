@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from backend.council import build_user_prompt, parse_ranking_from_text
+import httpx
+import respx
+
+from backend.config import OPENROUTER_API_URL
+from backend.council import (
+    build_user_prompt,
+    parse_ranking_from_text,
+    run_full_council,
+    stage1_collect_responses,
+    generate_conversation_title,
+)
 
 
 # ---- build_user_prompt -----------------------------------------------------
@@ -77,3 +87,61 @@ def test_parse_handles_extra_whitespace_in_numbered_list():
 def test_parse_boundary_single_response():
     text = "FINAL RANKING:\n1. Response A"
     assert parse_ranking_from_text(text) == ["Response A"]
+
+
+# ---- per-request API key threading -----------------------------------------
+
+_CANNED = "FINAL RANKING:\n1. Response A\n2. Response B\n"
+
+
+def _mock_router():
+    mock = respx.mock(assert_all_called=False)
+    mock.post(OPENROUTER_API_URL).mock(
+        return_value=httpx.Response(
+            200, json={"choices": [{"message": {"content": _CANNED}}]}
+        )
+    )
+    return mock
+
+
+async def test_query_uses_provided_api_key_in_header():
+    captured = []
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": _CANNED}}]}
+        )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(OPENROUTER_API_URL).mock(side_effect=capture)
+        results = await stage1_collect_responses("hi", "sk-test", None)
+
+    assert results
+    assert captured
+    assert all(h == "Bearer sk-test" for h in captured)
+
+
+async def test_run_full_council_threads_key():
+    with _mock_router():
+        stage1, stage2, stage3, metadata = await run_full_council("hi", "sk-test")
+    assert stage1
+    assert stage2
+    assert stage3["response"]
+
+
+async def test_generate_title_threads_key():
+    with respx.mock(assert_all_called=False) as mock:
+        captured = []
+
+        def capture(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers.get("authorization"))
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": "A Title"}}]}
+            )
+
+        mock.post(OPENROUTER_API_URL).mock(side_effect=capture)
+        title = await generate_conversation_title("question", "sk-test")
+
+    assert title == "A Title"
+    assert captured == ["Bearer sk-test"]

@@ -1,15 +1,21 @@
-"""FastAPI backend for LLM Council."""
+"""FastAPI backend for LLM Council (multi-tenant)."""
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+import os
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-import uuid
+from typing import List, Dict, Any
 import json
 import asyncio
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from . import storage
+from . import clerk_keys
+from .auth import get_current_user
+from .db import get_session
+from .models import User
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -30,10 +36,11 @@ from .documents import (
 
 app = FastAPI(title="LLM Council API")
 
-# Enable CORS for local development
+# CORS: allowed origins come from the environment (comma-separated).
+_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in _cors_origins if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,6 +111,14 @@ def _merge_documents(
     return list(by_name.values())
 
 
+async def _require_key(user: User) -> str:
+    """Fetch the caller's OpenRouter key from Clerk or raise 409."""
+    try:
+        return await clerk_keys.get_openrouter_key(user.clerk_id)
+    except clerk_keys.NoKeyError:
+        raise HTTPException(status_code=409, detail="no_openrouter_key")
+
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
@@ -111,23 +126,32 @@ async def root():
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
-async def list_conversations():
-    """List all conversations (metadata only)."""
-    return storage.list_conversations()
+async def list_conversations(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """List the authenticated user's conversations (metadata only)."""
+    return await storage.list_conversations(session, user.id)
 
 
 @app.post("/api/conversations", response_model=Conversation)
-async def create_conversation(request: CreateConversationRequest):
-    """Create a new conversation."""
-    conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
-    return conversation
+async def create_conversation(
+    request: CreateConversationRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Create a new conversation for the authenticated user."""
+    return await storage.create_conversation(session, user.id)
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: str):
-    """Get a specific conversation with all its messages."""
-    conversation = storage.get_conversation(conversation_id)
+async def get_conversation(
+    conversation_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get a specific conversation owned by the authenticated user."""
+    conversation = await storage.get_conversation(session, user.id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
@@ -138,14 +162,18 @@ async def send_message(
     conversation_id: str,
     content: str = Form(...),
     files: List[UploadFile] = File(default_factory=list),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Send a message and run the 3-stage council process.
     Returns the complete response with all stages.
     """
-    conversation = storage.get_conversation(conversation_id)
+    conversation = await storage.get_conversation(session, user.id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    api_key = await _require_key(user)
 
     new_documents = await _read_uploads(files)
     prior_documents = storage.collect_conversation_documents(conversation)
@@ -153,18 +181,18 @@ async def send_message(
 
     is_first_message = len(conversation["messages"]) == 0
 
-    storage.add_user_message(conversation_id, content, new_documents)
+    await storage.add_user_message(session, conversation_id, content, new_documents)
 
     if is_first_message:
-        title = await generate_conversation_title(content)
-        storage.update_conversation_title(conversation_id, title)
+        title = await generate_conversation_title(content, api_key)
+        await storage.update_conversation_title(session, conversation_id, title)
 
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        content, all_documents
+        content, api_key, all_documents
     )
 
-    storage.add_assistant_message(
-        conversation_id, stage1_results, stage2_results, stage3_result
+    await storage.add_assistant_message(
+        session, conversation_id, stage1_results, stage2_results, stage3_result
     )
 
     return {
@@ -180,13 +208,17 @@ async def send_message_stream(
     conversation_id: str,
     content: str = Form(...),
     files: List[UploadFile] = File(default_factory=list),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Send a message and stream the 3-stage council process via SSE.
     """
-    conversation = storage.get_conversation(conversation_id)
+    conversation = await storage.get_conversation(session, user.id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    api_key = await _require_key(user)
 
     new_documents = await _read_uploads(files)
     prior_documents = storage.collect_conversation_documents(conversation)
@@ -196,17 +228,23 @@ async def send_message_stream(
 
     async def event_generator():
         try:
-            storage.add_user_message(conversation_id, content, new_documents)
+            await storage.add_user_message(
+                session, conversation_id, content, new_documents
+            )
 
             title_task = None
             if is_first_message:
-                title_task = asyncio.create_task(generate_conversation_title(content))
+                title_task = asyncio.create_task(
+                    generate_conversation_title(content, api_key)
+                )
 
             combined_prompt = build_user_prompt(content, all_documents)
 
             # Stage 1
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(content, all_documents)
+            stage1_results = await stage1_collect_responses(
+                content, api_key, all_documents
+            )
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             if not stage1_results:
@@ -215,22 +253,28 @@ async def send_message_stream(
 
             # Stage 2
             yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            stage2_results, label_to_model = await stage2_collect_rankings(combined_prompt, stage1_results)
+            stage2_results, label_to_model = await stage2_collect_rankings(
+                combined_prompt, stage1_results, api_key
+            )
             aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
             yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
             # Stage 3
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(combined_prompt, stage1_results, stage2_results)
+            stage3_result = await stage3_synthesize_final(
+                combined_prompt, stage1_results, stage2_results, api_key
+            )
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                await storage.update_conversation_title(
+                    session, conversation_id, title
+                )
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
-            storage.add_assistant_message(
-                conversation_id, stage1_results, stage2_results, stage3_result
+            await storage.add_assistant_message(
+                session, conversation_id, stage1_results, stage2_results, stage3_result
             )
 
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
