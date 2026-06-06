@@ -7,6 +7,7 @@ import ChatInterface from "@/components/council/ChatInterface";
 import { createApi } from "@/lib/api";
 import type { ConversationSummary } from "@/lib/api";
 import type { CouncilConversation, CouncilMessage } from "@/components/council/types";
+import ApiKeyPanel from "@/components/settings/ApiKeyPanel";
 import "./app.css";
 
 export default function CouncilApp() {
@@ -20,6 +21,7 @@ export default function CouncilApp() {
   const [currentConversation, setCurrentConversation] =
     useState<CouncilConversation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [needsKey, setNeedsKey] = useState(false);
 
   const loadConversations = useCallback(async () => {
     try {
@@ -78,6 +80,7 @@ export default function CouncilApp() {
     if (!currentConversationId) return;
 
     setIsLoading(true);
+    setNeedsKey(false);
     try {
       const userMessage: CouncilMessage = {
         role: "user",
@@ -196,6 +199,9 @@ export default function CouncilApp() {
       );
     } catch (error) {
       console.error("Failed to send message:", error);
+      if ((error as { status?: number }).status === 409) {
+        setNeedsKey(true);
+      }
       setCurrentConversation((prev) =>
         prev ? { ...prev, messages: prev.messages.slice(0, -2) } : prev
       );
@@ -215,6 +221,11 @@ export default function CouncilApp() {
         <div className="app-topbar">
           <UserButton afterSignOutUrl="/" />
         </div>
+        {needsKey && (
+          <div className="api-key-banner">
+            <ApiKeyPanel />
+          </div>
+        )}
         <ChatInterface
           conversation={currentConversation}
           onSendMessage={handleSendMessage}
