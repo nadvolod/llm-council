@@ -7,7 +7,7 @@ describe("validateOpenRouterKey", () => {
     const result = await validateOpenRouterKey("sk-or-abcd1234", fetchImpl);
     expect(result).toEqual({ ok: true, last4: "1234" });
     const [url, options] = fetchImpl.mock.calls[0];
-    expect(url).toBe("https://openrouter.ai/api/v1/models");
+    expect(url).toBe("https://openrouter.ai/api/v1/key");
     expect(options.headers.Authorization).toBe("Bearer sk-or-abcd1234");
   });
 
