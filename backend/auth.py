@@ -8,6 +8,9 @@ from .db import get_session
 from .models import User
 
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL", "")
+# Optional: when set, the token's `iss` claim is verified against it (defense in
+# depth on top of JWKS signature verification). Left empty in tests.
+CLERK_ISSUER = os.getenv("CLERK_ISSUER", "")
 _jwk_client = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
 
 
@@ -24,7 +27,10 @@ def _get_signing_key(token: str):
 async def authenticate(token: str, session: AsyncSession) -> User:
     try:
         key = _get_signing_key(token)
-        claims = jwt.decode(token, key, algorithms=["RS256"], options={"verify_aud": False})
+        decode_kwargs: dict = {"algorithms": ["RS256"], "options": {"verify_aud": False}}
+        if CLERK_ISSUER:
+            decode_kwargs["issuer"] = CLERK_ISSUER
+        claims = jwt.decode(token, key, **decode_kwargs)
     except Exception as e:
         raise AuthError(str(e))
     clerk_id = claims.get("sub")

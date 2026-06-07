@@ -1,4 +1,5 @@
 """Read a user's OpenRouter key from Clerk privateMetadata (cached)."""
+import asyncio
 import os, time
 from clerk_backend_api import Clerk
 
@@ -22,7 +23,9 @@ async def get_openrouter_key(clerk_id: str) -> str:
     hit = _cache.get(clerk_id)
     if hit and hit[0] > now:
         return hit[1]
-    meta = _fetch_private_metadata(clerk_id)
+    # Clerk's SDK call is synchronous/blocking; run it off the event loop so a
+    # single key lookup doesn't stall all other concurrent requests.
+    meta = await asyncio.to_thread(_fetch_private_metadata, clerk_id)
     key = meta.get("openrouterKey")
     if not key:
         raise NoKeyError("no openrouter key set")
