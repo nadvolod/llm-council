@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 import json
 import asyncio
+import contextlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -227,12 +228,12 @@ async def send_message_stream(
     is_first_message = len(conversation["messages"]) == 0
 
     async def event_generator():
+        title_task = None
         try:
             await storage.add_user_message(
                 session, conversation_id, content, new_documents
             )
 
-            title_task = None
             if is_first_message:
                 title_task = asyncio.create_task(
                     generate_conversation_title(content, api_key)
@@ -268,6 +269,7 @@ async def send_message_stream(
 
             if title_task:
                 title = await title_task
+                title_task = None
                 await storage.update_conversation_title(
                     session, conversation_id, title
                 )
@@ -281,6 +283,13 @@ async def send_message_stream(
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            # If we exited before awaiting the title (e.g. stage-1 failure),
+            # cancel the background task so it doesn't leak or bill the user.
+            if title_task is not None and not title_task.done():
+                title_task.cancel()
+                with contextlib.suppress(Exception):
+                    await title_task
 
     return StreamingResponse(
         event_generator(),

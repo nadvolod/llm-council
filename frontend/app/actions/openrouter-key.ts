@@ -38,15 +38,19 @@ export async function setOpenRouterKey(
     };
   }
 
-  const client = await clerkClient();
-  await client.users.updateUser(userId, {
-    privateMetadata: { openrouterKey: key },
-    publicMetadata: {
-      hasKey: true,
-      last4: validation.last4,
-      validatedAt: Date.now(),
-    },
-  });
+  try {
+    const client = await clerkClient();
+    await client.users.updateUser(userId, {
+      privateMetadata: { openrouterKey: key },
+      publicMetadata: {
+        hasKey: true,
+        last4: validation.last4,
+        validatedAt: Date.now(),
+      },
+    });
+  } catch {
+    return { ok: false, error: "Couldn't save your key right now. Please retry." };
+  }
 
   return { ok: true, last4: validation.last4 };
 }
@@ -60,11 +64,15 @@ export async function clearOpenRouterKey(): Promise<KeyActionResult> {
     return { ok: false, error: "Not authenticated" };
   }
 
-  const client = await clerkClient();
-  await client.users.updateUser(userId, {
-    privateMetadata: { openrouterKey: null },
-    publicMetadata: { hasKey: false },
-  });
+  try {
+    const client = await clerkClient();
+    await client.users.updateUser(userId, {
+      privateMetadata: { openrouterKey: null },
+      publicMetadata: { hasKey: false },
+    });
+  } catch {
+    return { ok: false, error: "Couldn't remove your key right now. Please retry." };
+  }
 
   return { ok: true };
 }

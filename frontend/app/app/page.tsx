@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth, UserButton } from "@clerk/nextjs";
 import Sidebar from "@/components/council/Sidebar";
 import ChatInterface from "@/components/council/ChatInterface";
@@ -22,6 +22,8 @@ export default function CouncilApp() {
     useState<CouncilConversation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
+  // Monotonic counter so a slow earlier load can't overwrite a newer selection.
+  const conversationReqSeq = useRef(0);
 
   const loadConversations = useCallback(async () => {
     try {
@@ -34,9 +36,13 @@ export default function CouncilApp() {
 
   const loadConversation = useCallback(
     async (id: string) => {
+      const reqSeq = ++conversationReqSeq.current;
       try {
         const conv = (await api.getConversation(id)) as CouncilConversation;
-        setCurrentConversation(conv);
+        // Ignore if a newer selection superseded this request.
+        if (reqSeq === conversationReqSeq.current) {
+          setCurrentConversation(conv);
+        }
       } catch (error) {
         console.error("Failed to load conversation:", error);
       }

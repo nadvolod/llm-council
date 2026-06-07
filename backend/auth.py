@@ -3,6 +3,7 @@ import os, jwt
 from jwt import PyJWKClient
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from .db import get_session
 from .models import User
@@ -40,8 +41,15 @@ async def authenticate(token: str, session: AsyncSession) -> User:
     if user is None:
         user = User(clerk_id=clerk_id, email=claims.get("email"))
         session.add(user)
-        await session.commit()
-        await session.refresh(user)
+        try:
+            await session.commit()
+            await session.refresh(user)
+        except IntegrityError:
+            # A concurrent request provisioned the same user first; reuse it.
+            await session.rollback()
+            user = (
+                await session.execute(select(User).where(User.clerk_id == clerk_id))
+            ).scalar_one()
     return user
 
 

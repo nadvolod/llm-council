@@ -37,6 +37,9 @@ export default function Stage2({
     return null;
   }
 
+  // Clamp on read: activeTab may exceed the list after a conversation switch.
+  const safeTab = activeTab < rankings.length ? activeTab : 0;
+
   return (
     <div className="stage stage2">
       <h3 className="stage-title">Stage 2: Peer Rankings</h3>
@@ -60,19 +63,19 @@ export default function Stage2({
       </div>
 
       <div className="tab-content">
-        <div className="ranking-model">{rankings[activeTab].model}</div>
+        <div className="ranking-model">{rankings[safeTab].model}</div>
         <div className="ranking-content markdown-content">
           <ReactMarkdown>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
+            {deAnonymizeText(rankings[safeTab].ranking, labelToModel)}
           </ReactMarkdown>
         </div>
 
-        {rankings[activeTab].parsed_ranking &&
-          rankings[activeTab].parsed_ranking!.length > 0 && (
+        {rankings[safeTab].parsed_ranking &&
+          rankings[safeTab].parsed_ranking!.length > 0 && (
             <div className="parsed-ranking">
               <strong>Extracted Ranking:</strong>
               <ol>
-                {rankings[activeTab].parsed_ranking!.map((label, i) => (
+                {rankings[safeTab].parsed_ranking!.map((label, i) => (
                   <li key={i}>
                     {labelToModel && labelToModel[label]
                       ? labelToModel[label].split("/")[1] || labelToModel[label]

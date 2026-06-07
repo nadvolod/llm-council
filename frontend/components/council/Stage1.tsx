@@ -16,6 +16,9 @@ export default function Stage1({ responses }: Stage1Props) {
     return null;
   }
 
+  // Clamp on read: activeTab may exceed the list after a conversation switch.
+  const safeTab = activeTab < responses.length ? activeTab : 0;
+
   return (
     <div className="stage stage1">
       <h3 className="stage-title">Stage 1: Individual Responses</h3>
@@ -33,9 +36,9 @@ export default function Stage1({ responses }: Stage1Props) {
       </div>
 
       <div className="tab-content">
-        <div className="model-name">{responses[activeTab].model}</div>
+        <div className="model-name">{responses[safeTab].model}</div>
         <div className="response-text markdown-content">
-          <ReactMarkdown>{responses[activeTab].response}</ReactMarkdown>
+          <ReactMarkdown>{responses[safeTab].response}</ReactMarkdown>
         </div>
       </div>
     </div>
